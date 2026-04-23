@@ -3,42 +3,42 @@
 	"FileReferences": {
 		"Moc": "Epsilon_free.moc3",
 		"Textures": [
-			"Epsilon_free.2048/texture_00.png"
+			"textures/texture_00.png"
 		],
 		"Physics": "Epsilon_free.physics3.json",
 		"DisplayInfo": "Epsilon_free.cdi3.json",
 		"Expressions": [
 			{
 				"Name": "Angry",
-				"File": "expressions/Angry.exp3.json"
+				"File": "Angry.exp3.json"
 			},
 			{
 				"Name": "Blushing",
-				"File": "expressions/Blushing.exp3.json"
+				"File": "Blushing.exp3.json"
 			},
 			{
 				"Name": "f01",
-				"File": "expressions/f01.exp3.json"
+				"File": "f01.exp3.json"
 			},
 			{
 				"Name": "f02",
-				"File": "expressions/f02.exp3.json"
+				"File": "f02.exp3.json"
 			},
 			{
 				"Name": "Normal",
-				"File": "expressions/Normal.exp3.json"
+				"File": "Normal.exp3.json"
 			},
 			{
 				"Name": "Sad",
-				"File": "expressions/Sad.exp3.json"
+				"File": "Sad.exp3.json"
 			},
 			{
 				"Name": "Smile",
-				"File": "expressions/Smile.exp3.json"
+				"File": "Smile.exp3.json"
 			},
 			{
 				"Name": "Surprised",
-				"File": "expressions/Surprised.exp3.json"
+				"File": "Surprised.exp3.json"
 			}
 		],
 		"Motions": {
