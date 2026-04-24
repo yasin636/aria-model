@@ -251,7 +251,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg0);-webkit-f
 
   <div id="actions">
     <button class="abtn bcyan" onclick="doReal()">
-      <span class="bico">🎙</span><span>Real Assistant Mode</span>
+      <span class="bico">🎙</span><span id="realBtnText">Real Assistant Mode</span>
     </button>
     <button class="abtn bpink" onclick="openModal()">
       <span class="bico">💬</span><span>Text Assistant Mode</span>
@@ -424,25 +424,10 @@ function spawnRipple(count=1){
 
 // ══════════════════════════════════════════════════════
 //  PIXI + LIVE2D INIT
-//
-//  ROOT CAUSE OF TEXTURE ERROR:
-//  pixi-live2d-display uses XHR internally and resolves
-//  texture paths relative to the .model3.json URL.
-//  When GitHub serves the JSON, the texture path
-//  "Epsilon_free.2048/texture_00.png" must resolve against
-//  the same base directory.
-//
-//  FIX APPLIED:
-//  1. We use Live2DModel.from() with the full JSON URL —
-//     the library auto-resolves relative paths from it.
-//  2. We register a custom XHR middleware that injects
-//     the correct base URL for any relative asset requests
-//     (covers textures, physics, expressions, motions).
-//  3. We explicitly pass { autoUpdate: true } so the
-//     internal ticker runs on the PixiJS shared ticker.
 // ══════════════════════════════════════════════════════
 let pixiApp = null;
 let initAttempts = 0;
+let isSpeaking = false;
 
 async function waitFor(checkFn, label, interval=200, max=50){
   return new Promise((res,rej)=>{
@@ -463,44 +448,23 @@ async function initLive2D(){
   setStatus('INITIALIZING ARIA...');
 
   try{
-    // ── Step 1: Wait for PixiJS ──
     await waitFor(()=>window.PIXI&&window.PIXI.Application,'PIXI.Application');
     setProgress(20,'PixiJS ready...');
 
-    // ── Step 2: Wait for Cubism Core ──
     await waitFor(()=>window.Live2DCubismCore,'Live2DCubismCore');
     setProgress(40,'Cubism core ready...');
 
-    // ── Step 3: Wait for pixi-live2d-display ──
     await waitFor(()=>window.PIXI&&window.PIXI.live2d&&window.PIXI.live2d.Live2DModel,'PIXI.live2d.Live2DModel');
     setProgress(55,'Live2D plugin ready...');
 
     const { Live2DModel } = PIXI.live2d;
-
-    // ── Step 4: Register XHR middleware ──
-    // This intercepts every asset request and rewrites bare
-    // filenames so they include the full GitHub raw base URL.
-    // Without this, the texture PNG never loads (404).
     Live2DModel.registerTicker(PIXI.Ticker);
-
-    // XHR middleware — intercept all asset loads
-    // pixi-live2d-display exposes this on Live2DModel
-    if(Live2DModel.onLoad){
-      // Some builds expose onLoad hook
-    }
-
-    // Use the built-in cubism4 XHR hook to set base path.
-    // The cleanest official fix: pass the URL directly so the
-    // library derives the base path automatically.
-    // We also configure the fetch function if available.
     setProgress(65,'Creating renderer...');
 
-    // ── Step 5: Create PixiJS App ──
     const wrapper = document.getElementById('pixiWrapper');
     const W = wrapper.clientWidth  || window.innerWidth;
     const H = wrapper.clientHeight || Math.round(window.innerHeight * 0.5);
 
-    // Destroy previous app if retrying
     if(pixiApp){ try{ pixiApp.destroy(true); }catch(e){} pixiApp=null; }
 
     pixiApp = new PIXI.Application({
@@ -518,42 +482,42 @@ async function initLive2D(){
 
     setProgress(75,'Loading Live2D model...');
 
-    // ── Step 6: Load model ──
-    // KEY FIX: passing the full URL causes the plugin to
-    // set baseUrl = folder of the JSON automatically.
-    // Every relative asset (texture, physics, motions) is
-    // then fetched as BASE_URL + relative_path correctly.
     ariaModel = await Live2DModel.from(MODEL_JSON, {
       autoInteract: false,
       autoUpdate:   true,
-      // cubism4 SDK options
       motionPreload: PIXI.live2d.MotionPreloadStrategy ? PIXI.live2d.MotionPreloadStrategy.IDLE : 'IDLE',
     });
 
     setProgress(90,'Positioning model...');
 
-    // ── Step 7: Scale & center ──
     const rW = pixiApp.renderer.width  / pixiApp.renderer.resolution;
     const rH = pixiApp.renderer.height / pixiApp.renderer.resolution;
-
-    // Get intrinsic model size before scaling
     const mW = ariaModel.internalModel ? ariaModel.internalModel.width  : ariaModel.width;
     const mH = ariaModel.internalModel ? ariaModel.internalModel.height : ariaModel.height;
-
-    // Scale to fill ~80% of width or ~95% of height, whichever is tighter
-    const scale = Math.min(
-      (rW * 0.82) / mW,
-      (rH * 0.95) / mH
-    );
+    const scale = Math.min((rW * 0.82) / mW, (rH * 0.95) / mH);
+    
     ariaModel.scale.set(scale);
     ariaModel.anchor.set(0.5, 0.5);
-    // Position center-x, shift up slightly so head is visible
     ariaModel.x = rW / 2;
     ariaModel.y = rH / 2 + rH * 0.04;
-
     pixiApp.stage.addChild(ariaModel);
 
-    // ── Step 8: Eye tracking (look at pointer) ──
+    // LIP-SYNC LOGIC (overriding mouth parameter dynamically)
+    pixiApp.ticker.add(() => {
+      if (!ariaModel || !ariaModel.internalModel || !ariaModel.internalModel.coreModel) return;
+      const core = ariaModel.internalModel.coreModel;
+      
+      if (isSpeaking) {
+        // Fast random oscillation simulating talking
+        const mouthVal = Math.random() > 0.35 ? (Math.random() * 0.8 + 0.2) : 0;
+        try { core.setParameterValueById('ParamMouthOpenY', mouthVal); } catch(e){}
+      } else {
+        // Ensure mouth closes properly
+        try { core.setParameterValueById('ParamMouthOpenY', 0); } catch(e){}
+      }
+    });
+
+    // Eye Tracking
     const onMove = e => {
       if(!ariaModel) return;
       const rect = pixiApp.view.getBoundingClientRect();
@@ -564,33 +528,26 @@ async function initLive2D(){
     document.addEventListener('pointermove', onMove, { passive:true });
     document.addEventListener('touchmove',   onMove, { passive:true });
 
-    // ── Step 9: Handle resize ──
     window.addEventListener('resize', ()=>{
       if(!pixiApp||!ariaModel) return;
       const wEl = document.getElementById('pixiWrapper');
       const nW  = wEl.clientWidth;
       const nH  = wEl.clientHeight;
       pixiApp.renderer.resize(nW, nH);
-      const rWn = nW, rHn = nH;
-      const sc2 = Math.min((rWn*0.82)/mW, (rHn*0.95)/mH);
+      const sc2 = Math.min((nW*0.82)/mW, (nH*0.95)/mH);
       ariaModel.scale.set(sc2);
-      ariaModel.x = rWn/2;
-      ariaModel.y = rHn/2 + rHn*0.04;
+      ariaModel.x = nW/2;
+      ariaModel.y = nH/2 + nH*0.04;
     });
 
-    // ── Step 10: Start idle motion ──
-    setTimeout(()=>{
-      try{ ariaModel.motion('Idle'); }catch(e){}
-    }, 500);
+    setTimeout(()=>{ try{ ariaModel.motion('Idle'); }catch(e){} }, 500);
 
-    // ── Done! ──
     setProgress(100,'ARIA Online');
     setTimeout(hideLoader, 600);
     setStatus('SYNCING WITH YASIN X PS...');
     setMood('happy');
     spawnRipple(2);
 
-    // Entrance animation
     gsap.fromTo(wrapper,{opacity:0,y:20},{opacity:1,y:0,duration:1,ease:'power3.out'});
     setTimeout(()=>{
       showBubble('আসসালামু আলাইকুম মিস্টার ইয়াসিন! আমি ARIA, আপনার AI সহকারী। কিভাবে সাহায্য করতে পারি? ✨');
@@ -599,31 +556,56 @@ async function initLive2D(){
 
   } catch(err){
     console.error('[ARIA] Init failed:', err);
-    showError(
-      `ARIA লোড করা সম্ভব হয়নি। ইন্টারনেট সংযোগ চেক করুন এবং Retry করুন।`,
-      err.message
-    );
+    showError(`ARIA লোড করা সম্ভব হয়নি। ইন্টারনেট সংযোগ চেক করুন এবং Retry করুন।`, err.message);
   }
 }
 
 // ══════════════════════════════════════════════════════
-//  TTS — BENGALI VOICE
+//  DYNAMIC BEHAVIORS (Look around while speaking)
 // ══════════════════════════════════════════════════════
-let isSpeaking = false;
+let lookTimer;
+function startRandomLook() {
+  clearInterval(lookTimer);
+  lookTimer = setInterval(() => {
+    if (!isSpeaking) {
+      clearInterval(lookTimer);
+      return;
+    }
+    if (ariaModel && pixiApp) {
+      const w = pixiApp.view.width / pixiApp.renderer.resolution;
+      const h = pixiApp.view.height / pixiApp.renderer.resolution;
+      // Pick random human-like focus points
+      const rx = (Math.random() * 0.8 + 0.1) * w;
+      const ry = (Math.random() * 0.8 + 0.1) * h;
+      ariaModel.focus(rx, ry);
+    }
+  }, 1200 + Math.random() * 1500); // 1.2s to 2.7s shifts
+}
 
+// ══════════════════════════════════════════════════════
+//  TTS — BENGALI VOICE + LIP SYNC + MOTIONS
+// ══════════════════════════════════════════════════════
 function speak(text, mood='neutral'){
   setMood(mood);
   showBubble(text, 7000);
   isSpeaking = true;
 
-  // Motion
-  try{ if(ariaModel) ariaModel.motion('Tap', undefined, 3); }catch(e){}
+  // 1. Random Motions Triggering
+  const motionsList = ['Tap', 'FlickUp', 'FlickDown', 'FlickLeft', 'FlickRight', 'Idle'];
+  const randomMotion = motionsList[Math.floor(Math.random() * motionsList.length)];
+  try{ if(ariaModel) ariaModel.motion(randomMotion, undefined, 3); }catch(e){}
+  
   spawnRipple(1);
+  startRandomLook(); // Initiate Head Tilting / Look Around behavior
 
   if(!('speechSynthesis' in window)){
-    setTimeout(()=>isSpeaking=false, 3000);
+    setTimeout(()=>{ 
+      isSpeaking=false; 
+      resumeListening(); 
+    }, 3000);
     return;
   }
+  
   speechSynthesis.cancel();
   const utt = new SpeechSynthesisUtterance(text);
   utt.lang   = 'bn-BD';
@@ -636,19 +618,19 @@ function speak(text, mood='neutral'){
   const fem = voices.find(v=>/female|samantha|zira|hazel|victoria|karen|google uk english female/i.test(v.name));
   utt.voice = bn || fem || voices[0] || null;
 
-  utt.onend = utt.onerror = ()=>{ isSpeaking=false; };
+  utt.onend = utt.onerror = ()=>{ 
+    isSpeaking=false; 
+    resumeListening(); 
+  };
   speechSynthesis.speak(utt);
 }
 
 function greetSpeak(){
-  speak(
-    'আমি আপনার জন্য এখানে আছি মিস্টার ইয়াসিন। আমাকে যেকোনো কিছু জিজ্ঞেস করুন!',
-    'happy'
-  );
+  speak('আমি আপনার জন্য এখানে আছি মিস্টার ইয়াসিন। আমাকে যেকোনো কিছু জিজ্ঞেস করুন!', 'happy');
 }
 
 // ══════════════════════════════════════════════════════
-//  REAL ASSISTANT MODE (Speech Recognition)
+//  REAL ASSISTANT MODE (Continuous Speech Recognition)
 // ══════════════════════════════════════════════════════
 const BN_RESP = {
   neutral:  t=>`বুঝেছি! "${t}" — আমি এখনই প্রসেস করছি মিস্টার ইয়াসিন।`,
@@ -659,7 +641,26 @@ const BN_RESP = {
   surprised:t=>`সত্যিই? "${t}" — এটা তো অবিশ্বাস্য!`,
 };
 
+let isContinuousListening = false;
+let rec = null;
+
 function doReal(){
+  const btnText = document.getElementById('realBtnText');
+
+  // Toggle Off Mode
+  if (isContinuousListening) {
+    isContinuousListening = false;
+    if (rec) {
+      rec.onend = null; // Prevent the auto loop from restarting
+      rec.stop();
+    }
+    btnText.textContent = 'Real Assistant Mode';
+    setStatus('SYNCING WITH YASIN X PS...');
+    showBubble('মাইক্রোফোন বন্ধ করা হয়েছে।');
+    return;
+  }
+
+  // Toggle On Mode
   try{ if(ariaModel) ariaModel.motion('FlickUp', undefined, 3); }catch(e){}
   spawnRipple(1);
 
@@ -667,27 +668,56 @@ function doReal(){
     speak('দুঃখিত, এই ব্রাউজারে ভয়েস রিকগনিশন সাপোর্ট নেই। টেক্সট মোড ব্যবহার করুন।','sad');
     return;
   }
+
+  isContinuousListening = true;
+  btnText.textContent = 'Stop Assistant Mode';
+
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const rec = new Rec();
-  rec.lang = 'bn-BD';
-  rec.interimResults = false;
-  rec.maxAlternatives = 1;
+  
+  // Initialize only if null so we reuse the instance properly
+  if (!rec) {
+    rec = new Rec();
+    rec.lang = 'bn-BD';
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+
+    rec.onresult = e => {
+      const said = e.results[0][0].transcript;
+      const mood = detectMood(said);
+      setStatus('SYNCING WITH YASIN X PS...');
+      
+      // Pause microphone so she doesn't hear herself echoing while talking
+      rec.stop(); 
+      setTimeout(()=>speak((BN_RESP[mood]||BN_RESP.neutral)(said), mood), 400);
+    };
+
+    rec.onerror = e => {
+      // Ignore 'no-speech' error to keep loop clean, restart handles it
+      if (e.error !== 'no-speech') {
+        console.warn('Speech recognition error: ', e.error);
+      }
+    };
+  }
+
+  // Auto-Restart logic
+  rec.onend = () => {
+    if (isContinuousListening && !isSpeaking) {
+      try { rec.start(); } catch(err) {}
+    }
+  };
 
   showBubble('🎙 শুনছি... বলুন মিস্টার ইয়াসিন।');
   setStatus('🎙 LISTENING...');
+  try { rec.start(); } catch(err) {}
+}
 
-  rec.start();
-  rec.onresult = e => {
-    const said = e.results[0][0].transcript;
-    const mood = detectMood(said);
-    setStatus('SYNCING WITH YASIN X PS...');
-    setTimeout(()=>speak((BN_RESP[mood]||BN_RESP.neutral)(said), mood), 400);
-  };
-  rec.onerror = ()=>{
-    setStatus('SYNCING WITH YASIN X PS...');
-    speak('স্পষ্ট শুনতে পাইনি। আবার চেষ্টা করুন।','sad');
-  };
-  rec.onend = ()=>{ setStatus('SYNCING WITH YASIN X PS...'); };
+// Function to wake the microphone back up automatically after she finishes talking
+function resumeListening() {
+  if (isContinuousListening && rec) {
+    showBubble('🎙 শুনছি... বলুন মিস্টার ইয়াসিন।');
+    setStatus('🎙 LISTENING...');
+    try { rec.start(); } catch(err) {}
+  }
 }
 
 // ══════════════════════════════════════════════════════
@@ -712,7 +742,6 @@ document.getElementById('txtin').addEventListener('keydown',e=>{
 // ══════════════════════════════════════════════════════
 document.getElementById('retryBtn').addEventListener('click',()=>{
   hideError();
-  // Small delay before retrying
   setTimeout(initLive2D, 300);
 });
 
@@ -734,7 +763,6 @@ if('speechSynthesis' in window){
   speechSynthesis.onvoiceschanged = ()=>{};
 }
 
-// Boot after DOM is ready
 if(document.readyState==='complete'||document.readyState==='interactive'){
   initLive2D();
 } else {
